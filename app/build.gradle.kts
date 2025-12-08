@@ -58,6 +58,7 @@ dependencies {
     implementation(libs.androidx.constraintlayout)
     implementation(libs.androidx.lifecycle.livedata.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
+    implementation(libs.androidx.compose.runtime.saved.instance.state)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
@@ -72,4 +73,5 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("com.aliyun.alink.linksdk:lp-iot-linkkit:1.7.3.8")
 
+    implementation("com.amap.api:3dmap-location-search:latest.integration")
 }

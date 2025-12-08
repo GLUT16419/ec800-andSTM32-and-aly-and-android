@@ -1,5 +1,7 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-
-    <style name="Theme.Dgb" parent="android:Theme.Material.Light.NoActionBar" />
+<!-- res/values/themes.xml -->
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- 继承自 Material3 的 AppCompat 兼容主题 -->
+    <style name="Theme.Dgb" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- 自定义属性 -->
+    </style>
 </resources>
