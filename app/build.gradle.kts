@@ -16,7 +16,10 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
-
+        ndk {
+            //设置支持的SO库架构（开发者可以根据需要，选择一个或多个平台的so）
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+        }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -74,4 +77,8 @@ dependencies {
     implementation("com.aliyun.alink.linksdk:lp-iot-linkkit:1.7.3.8")
 
     implementation("com.amap.api:3dmap-location-search:latest.integration")
+
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.5.1")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.5.1")
 }

@@ -1,25 +1,62 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:gravity="center_horizontal"
-    android:padding="16dp">
+    android:background="@color/background_grey">
 
+    <!-- 标题栏 -->
     <TextView
         android:id="@+id/title_text"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:layout_marginTop="32dp"
+        android:layout_marginBottom="16dp"
+        android:layout_gravity="center_horizontal"
         android:textSize="24sp"
         android:textStyle="bold"
-        android:layout_marginTop="32dp" />
+        android:textColor="@color/primary_text" />
 
-    <!-- 这里可以添加地图视图 -->
-    <!--
+    <!-- 地图视图 -->
     <com.amap.api.maps.MapView
         android:id="@+id/map_view"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
-    -->
+        android:layout_height="250dp"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginBottom="16dp"
+        android:background="@color/card_background" />
 
+    <!-- 设备列表标题 -->
+    <TextView
+        android:id="@+id/devices_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginBottom="8dp"
+        android:text="冷链设备监控列表"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:textColor="@color/primary_text" />
+
+    <!-- CardView 列表容器 -->
+    <androidx.core.widget.NestedScrollView
+        android:id="@+id/cards_container"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true"
+        android:paddingHorizontal="16dp"
+        android:paddingBottom="16dp">
+
+        <LinearLayout
+            android:id="@+id/cards_linear_layout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:divider="@drawable/divider"
+            android:dividerPadding="8dp"
+            android:showDividers="middle" />
+
+    </androidx.core.widget.NestedScrollView>
 </LinearLayout>
