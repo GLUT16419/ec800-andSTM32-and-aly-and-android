@@ -5,6 +5,8 @@ import android.content.ContentValues.TAG
 import android.content.Intent
 import android.os.IBinder
 import android.util.Log
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
 import com.aliyun.alink.dm.api.DeviceInfo
 import com.aliyun.alink.dm.api.IoTApiClientConfig
 import com.aliyun.alink.linkkit.api.ILinkKitConnectListener
@@ -30,6 +32,14 @@ import java.util.Date
 class MqttService : Service() {
     public companion object {
         public var deviceList = mutableListOf<ColdChainDevice>()
+        object ServiceDataRepository {
+            private val _updateEvent = MutableLiveData<Unit>()
+            val updateEvent: LiveData<Unit> = _updateEvent
+
+            fun notifyFragmentToUpdate() {
+                _updateEvent.postValue(Unit) // 线程安全
+            }
+        }
     }
     private val PRODUCTKEY = "k21inrJttUu"
     private var DEVICENAME = "android"
@@ -74,13 +84,14 @@ class MqttService : Service() {
                 val speed=dataObject.optJSONObject("VehSpeed")?.optDouble("value")?.toFloat()?.toString()+"km/h"
                 val oxygenLevel = dataObject.optJSONObject("O2Content")?.optString("value")+"%"
                 Log.d(TAG, "解析结果 -> 设备: $deviceId, 温度: $temperature, 湿度: $humidity, 速度: $speed, 氧气浓度: $oxygenLevel")
+
                 // TODO: 在这里处理解析出的数据，例如更新UI、保存到数据库或触发其他逻辑
                 // 转换为字符串格式
                 // 创建 ColdChainDevice 对象
                 val coldChainDevice = ColdChainDevice(
                     id = 0,
                     name = deviceId,
-                    status = DeviceStatus.NORMAL,
+                    status = DeviceStatus.ERROR,
                     temperature = temperature.toString(),
                     oxygenLevel = oxygenLevel, // 新增：默认值为 "null"
                     humidity = humidity,
@@ -89,6 +100,15 @@ class MqttService : Service() {
                     latLng = LatLng(0.0, 0.0),
                     speed = speed
                 )
+                coldChainDevice.status = when {
+                    (coldChainDevice.oxygenLevel.replace("%", "").toDoubleOrNull() ?: 0.0) < 18.5 -> MqttService.DeviceStatus.ERROR
+                    (coldChainDevice.temperature.replace("°C", "").toDoubleOrNull() ?: 25.0) >5.0 -> MqttService.DeviceStatus.ERROR
+                    (coldChainDevice.humidity.replace("%", "").toDoubleOrNull() ?: 25.0) >50.0 -> MqttService.DeviceStatus.ERROR
+                    (coldChainDevice.oxygenLevel.replace("%", "").toDoubleOrNull() ?: 0.0) < 19.5 -> MqttService.DeviceStatus.WARNING
+                    (coldChainDevice.temperature.replace("°C", "").toDoubleOrNull() ?: 25.0) >0.0 -> MqttService.DeviceStatus.WARNING
+                    (coldChainDevice.humidity.replace("%", "").toDoubleOrNull() ?: 25.0) >30.0 -> MqttService.DeviceStatus.WARNING
+                    else -> DeviceStatus.NORMAL
+                }
                 updateDeviceData(coldChainDevice)
             }
         } catch (e: Exception) {
@@ -271,12 +291,13 @@ class MqttService : Service() {
                     device.speed=target.speed
                 if(target.humidity!="null")
                     device.humidity=target.humidity
-                if(target.status!=DeviceStatus.ERROR)
-                    device.status=target.status
+                device.status=target.status
+                ServiceDataRepository.notifyFragmentToUpdate()
                 return
             }
         }
         // 如果没有找到匹配的设备ID，添加新设备
         deviceList.add(target)
+        ServiceDataRepository.notifyFragmentToUpdate()
     }
 }

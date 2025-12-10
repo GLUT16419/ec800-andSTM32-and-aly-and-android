@@ -54,13 +54,12 @@ class HomeFragment : Fragment() {
 
         // 初始化设备数据
         initializeDeviceData()
-
+        MqttService.Companion.ServiceDataRepository.updateEvent.observe(viewLifecycleOwner) {
+            // 执行 UI 更新
+            refreshDeviceCards()
+        }
         // 添加设备卡片到界面
         addDeviceCards()
-
-        // 启动定时更新
-        startPeriodicUpdates()
-
         return view
     }
 
@@ -243,56 +242,11 @@ class HomeFragment : Fragment() {
         // 这里可以添加显示设备详细信息的逻辑
         // 例如：显示一个对话框或Snackbar
         val message = "${device.name}\n温度: ${device.temperature}\n湿度: ${device.humidity}\n氧气: ${device.oxygenLevel}"
-
         // 简单示例：可以在Log中显示
         println("设备详情: $message")
     }
 
-    private fun startPeriodicUpdates() {
-        // 停止之前的更新任务
-        updateJob?.cancel()
 
-        // 启动新的更新任务（每30秒更新一次）
-        updateJob = CoroutineScope(Dispatchers.Main).launch {
-            while (isActive) {
-                delay(5) // 5秒延迟
-                updateDeviceData()
-                refreshDeviceCards()
-            }
-        }
-    }
-
-    private fun updateDeviceData() {
-        // 模拟数据更新
-        deviceList.forEachIndexed { index, device ->
-//            // 随机更新温度（模拟实时变化）
-//            val randomTemp = 2.0 + (index * 0.5) + (Math.random() * 2 - 1)
-//            device.temperature = "${String.format("%.1f", randomTemp)}°C"
-//
-//            // 随机更新湿度
-//            val randomHumidity = 60.0 + (index * 2) + (Math.random() * 4 - 2)
-//            device.humidity = "${String.format("%.0f", randomHumidity)}%"
-//
-//            // 随机更新氧气浓度（正常范围18-22%）
-//            val randomOxygen = 19.0 + (Math.random() * 3)
-//            device.oxygenLevel = "${String.format("%.1f", randomOxygen)}%"
-//
-//            // 根据氧气浓度自动调整状态
-//            val oxygenValue = randomOxygen
-            device.status = when {
-                (device.oxygenLevel.replace("%", "").toDoubleOrNull() ?: 0.0) < 18.5 -> MqttService.DeviceStatus.ERROR
-                (device.temperature.replace("°C", "").toDoubleOrNull() ?: 25.0) >5.0 -> MqttService.DeviceStatus.ERROR
-                (device.humidity.replace("%", "").toDoubleOrNull() ?: 25.0) >50.0 -> MqttService.DeviceStatus.ERROR
-                (device.oxygenLevel.replace("%", "").toDoubleOrNull() ?: 0.0) < 19.5 -> MqttService.DeviceStatus.WARNING
-                (device.temperature.replace("°C", "").toDoubleOrNull() ?: 25.0) >0.0 -> MqttService.DeviceStatus.WARNING
-                (device.humidity.replace("%", "").toDoubleOrNull() ?: 25.0) >30.0 -> MqttService.DeviceStatus.WARNING
-                else -> MqttService.DeviceStatus.NORMAL
-            }
-
-            // 更新最后更新时间
-            device.lastUpdate = Date()
-        }
-    }
 
     private fun refreshDeviceCards() {
         // 刷新卡片显示
@@ -302,8 +256,6 @@ class HomeFragment : Fragment() {
     override fun onResume() {
         super.onResume()
         mapView.onResume()
-        // 重新启动定时更新
-        startPeriodicUpdates()
     }
 
     override fun onPause() {
