@@ -11,6 +11,7 @@ import com.amap.api.maps.AMap
 import com.amap.api.maps.MapView
 import com.amap.api.maps.model.LatLng
 import com.amap.api.maps.model.MarkerOptions
+import com.example.dgb.MqttService.Companion.deviceList
 import kotlinx.coroutines.*
 import java.text.SimpleDateFormat
 import java.util.*
@@ -21,7 +22,6 @@ class HomeFragment : Fragment() {
     private var aMap: AMap? = null
     private lateinit var titleText: TextView
     private lateinit var cardsContainer: ViewGroup
-    private val deviceList = mutableListOf<ColdChainDevice>()
     private var updateJob: Job? = null
 
     override fun onCreateView(
@@ -65,75 +65,82 @@ class HomeFragment : Fragment() {
     }
 
     private fun initializeDeviceData() {
-        deviceList.clear()
+        MqttService.deviceList.clear()
 
         // 模拟数据 - 冷链设备（添加氧气浓度）
-        deviceList.addAll(listOf(
-            ColdChainDevice(
+        MqttService.deviceList.addAll(listOf(
+            MqttService.ColdChainDevice(
                 id = 1,
                 name = "冷藏车-沪A12345",
-                status = DeviceStatus.NORMAL,
+                status = MqttService.DeviceStatus.NORMAL,
                 temperature = "2.5°C",
                 humidity = "65%",
                 oxygenLevel = "20.8%", // 正常氧气浓度
                 location = "上海市浦东新区张江高科技园区",
                 lastUpdate = Date(),
-                latLng = LatLng(31.230416, 121.473701)
+                latLng = LatLng(31.230416, 121.473701),
+                speed = "0.0km/h"
             ),
-            ColdChainDevice(
+            MqttService.ColdChainDevice(
                 id = 2,
                 name = "冷库-浦东配送中心",
-                status = DeviceStatus.WARNING,
+                status = MqttService.DeviceStatus.WARNING,
                 temperature = "4.2°C",
                 humidity = "70%",
                 oxygenLevel = "19.5%", // 略低氧气浓度
                 location = "上海市浦东新区金桥出口加工区",
                 lastUpdate = Date(System.currentTimeMillis() - 300000),
-                latLng = LatLng(31.263789, 121.593279)
+                latLng = LatLng(31.263789, 121.593279),
+                speed = "0.0km/h"
+
             ),
-            ColdChainDevice(
+            MqttService.ColdChainDevice(
                 id = 3,
                 name = "冷藏柜-徐汇门店",
-                status = DeviceStatus.ERROR,
+                status = MqttService.DeviceStatus.ERROR,
                 temperature = "8.7°C",
                 humidity = "75%",
                 oxygenLevel = "18.2%", // 危险氧气浓度
                 location = "上海市徐汇区淮海中路",
                 lastUpdate = Date(System.currentTimeMillis() - 600000),
-                latLng = LatLng(31.223237, 121.458698)
+                latLng = LatLng(31.223237, 121.458698),
+                speed = "0.0km/h"
             ),
-            ColdChainDevice(
+            MqttService.ColdChainDevice(
                 id = 4,
                 name = "冷藏车-沪B67890",
-                status = DeviceStatus.NORMAL,
+                status = MqttService.DeviceStatus.NORMAL,
                 temperature = "3.1°C",
                 humidity = "62%",
                 oxygenLevel = "20.9%", // 正常氧气浓度
                 location = "上海市虹桥国际机场货运区",
                 lastUpdate = Date(),
-                latLng = LatLng(31.197358, 121.333083)
+                latLng = LatLng(31.197358, 121.333083),
+                speed = "0.0km/h"
             ),
-            ColdChainDevice(
+            MqttService.ColdChainDevice(
                 id = 5,
                 name = "冷库-松江仓储中心",
-                status = DeviceStatus.NORMAL,
+                status = MqttService.DeviceStatus.NORMAL,
                 temperature = "1.8°C",
                 humidity = "58%",
                 oxygenLevel = "21.0%", // 正常氧气浓度
                 location = "上海市松江区泗泾物流园区",
                 lastUpdate = Date(System.currentTimeMillis() - 120000),
-                latLng = LatLng(31.128789, 121.268462)
+                latLng = LatLng(31.128789, 121.268462),
+                speed = "0.0km/h"
             ),
-            ColdChainDevice(
+            MqttService.ColdChainDevice(
                 id = 6,
                 name = "疫苗运输车-沪C11223",
-                status = DeviceStatus.WARNING,
+                status = MqttService.DeviceStatus.WARNING,
                 temperature = "3.5°C",
                 humidity = "60%",
                 oxygenLevel = "19.8%", // 警戒氧气浓度
                 location = "上海市长宁区临空经济园区",
                 lastUpdate = Date(System.currentTimeMillis() - 180000),
-                latLng = LatLng(31.223850, 121.362350)
+                latLng = LatLng(31.223850, 121.362350),
+                speed = "0.0km/h"
             )
         ))
 
@@ -142,7 +149,7 @@ class HomeFragment : Fragment() {
     }
 
     private fun addMarkersToMap() {
-        deviceList.forEach { device ->
+        MqttService.deviceList.forEach { device ->
             aMap?.addMarker(
                 MarkerOptions()
                     .position(device.latLng)
@@ -150,7 +157,6 @@ class HomeFragment : Fragment() {
                     .snippet("温度: ${device.temperature} | 氧气: ${device.oxygenLevel}")
             )
         }
-
         // 如果设备列表不为空，将地图镜头移动到第一个设备位置
         if (deviceList.isNotEmpty()) {
             aMap?.moveCamera(
@@ -180,11 +186,11 @@ class HomeFragment : Fragment() {
 
             // 根据状态设置背景颜色
             when (device.status) {
-                DeviceStatus.NORMAL ->
+                MqttService.DeviceStatus.NORMAL ->
                     statusText.setBackgroundResource(R.drawable.status_background_normal)
-                DeviceStatus.WARNING ->
+                MqttService.DeviceStatus.WARNING ->
                     statusText.setBackgroundResource(R.drawable.status_background_warning)
-                DeviceStatus.ERROR ->
+                MqttService.DeviceStatus.ERROR ->
                     statusText.setBackgroundResource(R.drawable.status_background_error)
             }
 
@@ -233,7 +239,7 @@ class HomeFragment : Fragment() {
         }
     }
 
-    private fun showDeviceDetails(device: ColdChainDevice) {
+    private fun showDeviceDetails(device: MqttService.ColdChainDevice) {
         // 这里可以添加显示设备详细信息的逻辑
         // 例如：显示一个对话框或Snackbar
         val message = "${device.name}\n温度: ${device.temperature}\n湿度: ${device.humidity}\n氧气: ${device.oxygenLevel}"
@@ -249,7 +255,7 @@ class HomeFragment : Fragment() {
         // 启动新的更新任务（每30秒更新一次）
         updateJob = CoroutineScope(Dispatchers.Main).launch {
             while (isActive) {
-                delay(30000) // 30秒延迟
+                delay(5) // 5秒延迟
                 updateDeviceData()
                 refreshDeviceCards()
             }
@@ -259,24 +265,28 @@ class HomeFragment : Fragment() {
     private fun updateDeviceData() {
         // 模拟数据更新
         deviceList.forEachIndexed { index, device ->
-            // 随机更新温度（模拟实时变化）
-            val randomTemp = 2.0 + (index * 0.5) + (Math.random() * 2 - 1)
-            device.temperature = "${String.format("%.1f", randomTemp)}°C"
-
-            // 随机更新湿度
-            val randomHumidity = 60.0 + (index * 2) + (Math.random() * 4 - 2)
-            device.humidity = "${String.format("%.0f", randomHumidity)}%"
-
-            // 随机更新氧气浓度（正常范围18-22%）
-            val randomOxygen = 19.0 + (Math.random() * 3)
-            device.oxygenLevel = "${String.format("%.1f", randomOxygen)}%"
-
-            // 根据氧气浓度自动调整状态
-            val oxygenValue = randomOxygen
+//            // 随机更新温度（模拟实时变化）
+//            val randomTemp = 2.0 + (index * 0.5) + (Math.random() * 2 - 1)
+//            device.temperature = "${String.format("%.1f", randomTemp)}°C"
+//
+//            // 随机更新湿度
+//            val randomHumidity = 60.0 + (index * 2) + (Math.random() * 4 - 2)
+//            device.humidity = "${String.format("%.0f", randomHumidity)}%"
+//
+//            // 随机更新氧气浓度（正常范围18-22%）
+//            val randomOxygen = 19.0 + (Math.random() * 3)
+//            device.oxygenLevel = "${String.format("%.1f", randomOxygen)}%"
+//
+//            // 根据氧气浓度自动调整状态
+//            val oxygenValue = randomOxygen
             device.status = when {
-                oxygenValue < 18.5 -> DeviceStatus.ERROR
-                oxygenValue < 19.5 -> DeviceStatus.WARNING
-                else -> DeviceStatus.NORMAL
+                (device.oxygenLevel.replace("%", "").toDoubleOrNull() ?: 0.0) < 18.5 -> MqttService.DeviceStatus.ERROR
+                (device.temperature.replace("°C", "").toDoubleOrNull() ?: 25.0) >5.0 -> MqttService.DeviceStatus.ERROR
+                (device.humidity.replace("%", "").toDoubleOrNull() ?: 25.0) >50.0 -> MqttService.DeviceStatus.ERROR
+                (device.oxygenLevel.replace("%", "").toDoubleOrNull() ?: 0.0) < 19.5 -> MqttService.DeviceStatus.WARNING
+                (device.temperature.replace("°C", "").toDoubleOrNull() ?: 25.0) >0.0 -> MqttService.DeviceStatus.WARNING
+                (device.humidity.replace("%", "").toDoubleOrNull() ?: 25.0) >30.0 -> MqttService.DeviceStatus.WARNING
+                else -> MqttService.DeviceStatus.NORMAL
             }
 
             // 更新最后更新时间
@@ -316,22 +326,7 @@ class HomeFragment : Fragment() {
     }
 
     // 数据模型类（添加氧气浓度字段）
-    data class ColdChainDevice(
-        val id: Int,
-        val name: String,
-        var status: DeviceStatus,
-        var temperature: String,
-        var humidity: String,
-        var oxygenLevel: String, // 新增：氧气浓度
-        val location: String,
-        var lastUpdate: Date,
-        val latLng: LatLng
-    )
 
-    // 设备状态枚举
-    enum class DeviceStatus(val displayName: String) {
-        NORMAL("正常"),
-        WARNING("警告"),
-        ERROR("异常")
-    }
+
+
 }

@@ -22,10 +22,15 @@ import com.aliyun.alink.linksdk.cmp.core.listener.IConnectSubscribeListener
 import com.aliyun.alink.linksdk.tmp.device.payload.ValueWrapper
 import com.aliyun.alink.linksdk.tools.AError
 import com.aliyun.alink.linksdk.tools.ALog
+import com.amap.api.maps.model.LatLng
 import org.json.JSONObject
+import java.util.Date
+
 
 class MqttService : Service() {
-
+    public companion object {
+        public var deviceList = mutableListOf<ColdChainDevice>()
+    }
     private val PRODUCTKEY = "k21inrJttUu"
     private var DEVICENAME = "android"
     private val DEVICESECRET = "26b9547a2fa381c978868c7b578c9271"
@@ -35,6 +40,24 @@ class MqttService : Service() {
     var hosturl="iot-06z00ccayws04qj.mqtt.iothub.aliyuncs.com:"+PORT
     val InstanceID="iot-06z00ccayws04qj"
 
+    // 设备状态枚举
+    enum class DeviceStatus(val displayName: String) {
+        NORMAL("正常"),
+        WARNING("警告"),
+        ERROR("异常")
+    }
+    public data class ColdChainDevice(
+        var id: Int,
+        var name: String,
+        var status: DeviceStatus,
+        var temperature: String,
+        var humidity: String,
+        var oxygenLevel: String, // 新增：氧气浓度
+        var location: String,
+        var lastUpdate: Date,
+        var latLng: LatLng,
+        var speed: String
+    )
     public
 
     override fun onBind(intent: Intent?): IBinder? {
@@ -43,14 +66,30 @@ class MqttService : Service() {
     private fun parseAndHandleMessage(jsonString: String) {
         try {
             val rootObject = JSONObject(jsonString)
-            val deviceId = rootObject.optString("deviceId")
-            val dataObject = rootObject.optJSONObject("data")
+            val deviceId = rootObject.optString("deviceName")
+            val dataObject = rootObject.optJSONObject("items")
             if (dataObject != null) {
-                val temperature = dataObject.optDouble("temperature")
-                val humidity = dataObject.optInt("humidity")
-                Log.d(TAG, "解析结果 -> 设备: $deviceId, 温度: $temperature, 湿度: $humidity")
+                val temperature = dataObject.optJSONObject("VehInsideTemp")?.optDouble("value")?.toString()+"°C"
+                val humidity = dataObject.optJSONObject("mhumi")?.optInt("value")?.toString()+"%"
+                val speed=dataObject.optJSONObject("VehSpeed")?.optDouble("value")?.toFloat()?.toString()+"km/h"
+                val oxygenLevel = dataObject.optJSONObject("O2Content")?.optString("value")+"%"
+                Log.d(TAG, "解析结果 -> 设备: $deviceId, 温度: $temperature, 湿度: $humidity, 速度: $speed, 氧气浓度: $oxygenLevel")
                 // TODO: 在这里处理解析出的数据，例如更新UI、保存到数据库或触发其他逻辑
-                // 例如：sendBroadcastToUpdateUI(temperature, humidity)
+                // 转换为字符串格式
+                // 创建 ColdChainDevice 对象
+                val coldChainDevice = ColdChainDevice(
+                    id = 0,
+                    name = deviceId,
+                    status = DeviceStatus.NORMAL,
+                    temperature = temperature.toString(),
+                    oxygenLevel = oxygenLevel, // 新增：默认值为 "null"
+                    humidity = humidity,
+                    location = "null",
+                    lastUpdate = Date(),
+                    latLng = LatLng(0.0, 0.0),
+                    speed = speed
+                )
+                updateDeviceData(coldChainDevice)
             }
         } catch (e: Exception) {
             Log.e(TAG, "解析JSON失败", e)
@@ -190,5 +229,54 @@ class MqttService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         deviceConnect()
         return START_STICKY
+    }
+
+    public fun getLatestData(): ColdChainDevice{
+        var latestData= ColdChainDevice(
+            temperature = "null",
+            oxygenLevel = "null",
+            location = "null",
+            lastUpdate = Date(),
+            latLng = LatLng(0.0, 0.0),
+            speed = "null",
+            humidity = "null",
+            status = DeviceStatus.ERROR,
+            id=-1,
+            name = "null"
+        )
+        // 从阿里云获取设备数据
+        latestData.speed=LinkKit.getInstance().getDeviceThing().getPropertyValue("VehSpeed").toString()+"km/h"
+        latestData.temperature=LinkKit.getInstance().getDeviceThing().getPropertyValue("VehInsideTemp").toString()+"°C"
+        latestData.oxygenLevel=LinkKit.getInstance().getDeviceThing().getPropertyValue("O2Content").toString()+"%"
+        latestData.humidity= LinkKit.getInstance().getDeviceThing().getPropertyValue("mhumi").toString()
+        latestData.location=LinkKit.getInstance().getDeviceThing().getPropertyValue("GeoLocation").toString()
+        latestData.name= LinkKit.getInstance().getDeviceThing().getPropertyValue("DevName").toString()
+        return latestData
+    }
+
+    private fun updateDeviceData(target: ColdChainDevice){
+        deviceList.forEachIndexed { index, device ->
+            if (device.name == target.name) {
+                if(target.temperature!="null")
+                    device.temperature=target.temperature
+                if(target.oxygenLevel!="null")
+                    device.oxygenLevel=target.oxygenLevel
+                if(target.location!="null")
+                    device.location=target.location
+                if(target.lastUpdate!=Date())
+                    device.lastUpdate=target.lastUpdate
+                if(target.latLng!=LatLng(0.0, 0.0))
+                    device.latLng=target.latLng
+                if(target.speed!="null")
+                    device.speed=target.speed
+                if(target.humidity!="null")
+                    device.humidity=target.humidity
+                if(target.status!=DeviceStatus.ERROR)
+                    device.status=target.status
+                return
+            }
+        }
+        // 如果没有找到匹配的设备ID，添加新设备
+        deviceList.add(target)
     }
 }
