@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import androidx.fragment.app.Fragment
+import com.example.dgb.ui.EventLogFragment
 import com.google.android.material.bottomnavigation.BottomNavigationView
 
 class MainActivity : AppCompatActivity() {
@@ -37,6 +38,16 @@ class MainActivity : AppCompatActivity() {
                 }
                 R.id.nav_device -> {
                     replaceFragment(DeviceFragment())
+                    true
+                }
+                R.id.nav_report -> {
+                    // 启动数据报表与分析页面
+                    val intent = Intent(this, DataAnalysisActivity::class.java)
+                    startActivity(intent)
+                    true
+                }
+                R.id.nav_log -> {
+                    replaceFragment(EventLogFragment.newInstance())
                     true
                 }
                 R.id.nav_user -> {

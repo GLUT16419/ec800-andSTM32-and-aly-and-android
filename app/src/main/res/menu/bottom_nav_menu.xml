@@ -9,6 +9,14 @@
         android:title="已注册设备"
         android:icon="@drawable/ic_menu" />
     <item
+        android:id="@+id/nav_report"
+        android:title="数据报表"
+        android:icon="@drawable/ic_chart" />
+    <item
+        android:id="@+id/nav_log"
+        android:title="事件日志"
+        android:icon="@drawable/ic_info" />
+    <item
         android:id="@+id/nav_user"
         android:title="个人"
         android:icon="@drawable/profile_icon" />

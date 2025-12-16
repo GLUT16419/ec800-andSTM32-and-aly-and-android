@@ -1,12 +1,15 @@
 package com.example.dgb
 
 import android.app.Dialog
+import android.content.Intent
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageButton
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.cardview.widget.CardView
@@ -14,9 +17,12 @@ import androidx.fragment.app.Fragment
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.amap.api.maps.model.LatLng
+import android.widget.CheckBox
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.*
+import androidx.lifecycle.lifecycleScope
+import com.example.dgb.MqttService
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.collections.ArrayList
@@ -30,9 +36,17 @@ class DeviceFragment : Fragment() {
     private lateinit var filterButton: MaterialButton
     private lateinit var searchEditText: TextInputEditText
     private lateinit var devicesContainer: ViewGroup
+    private lateinit var batchSelectButton: MaterialButton
+    private lateinit var batchActionBar: LinearLayout
+    private lateinit var selectedCountText: TextView
+    private lateinit var selectAllButton: MaterialButton
+    private lateinit var deleteBatchButton: MaterialButton
+    private lateinit var cancelBatchButton: MaterialButton
 
-    private val deviceList = mutableListOf<ColdChainDevice>()
-    private val filteredDeviceList = mutableListOf<ColdChainDevice>()
+    private val deviceList = mutableListOf<com.example.dgb.ColdChainDevice>()
+    private val filteredDeviceList = mutableListOf<com.example.dgb.ColdChainDevice>()
+    private val selectedDevices = mutableSetOf<Int>() // 存储选中的设备ID
+    private var isBatchMode = false // 是否处于批量选择模式
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -57,6 +71,18 @@ class DeviceFragment : Fragment() {
 
         return view
     }
+    
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        
+        // 监听MQTT设备数据更新事件，实时刷新设备列表
+        lifecycleScope.launch(Dispatchers.Main) {
+            MqttService.Companion.ServiceDataRepository.updateEvent.observe(viewLifecycleOwner) {
+                // 重新初始化设备数据以获取最新的MQTT设备数据
+                initializeDeviceData()
+            }
+        }
+    }
 
     private fun initViews(view: View) {
         titleText = view.findViewById(R.id.title_text)
@@ -69,102 +95,49 @@ class DeviceFragment : Fragment() {
         filterButton = view.findViewById(R.id.filter_button)
         searchEditText = view.findViewById(R.id.search_edittext)
         devicesContainer = view.findViewById(R.id.devices_container)
+
+        // 初始化批量操作相关视图
+        batchSelectButton = view.findViewById<MaterialButton>(R.id.batch_select_button)
+        batchActionBar = view.findViewById<LinearLayout>(R.id.batch_action_bar)
+        selectedCountText = view.findViewById<TextView>(R.id.selected_count_text)
+        selectAllButton = view.findViewById<MaterialButton>(R.id.select_all_button)
+        deleteBatchButton = view.findViewById<MaterialButton>(R.id.delete_batch_button)
+        cancelBatchButton = view.findViewById<MaterialButton>(R.id.cancel_batch_button)
+
+        // 设置批量操作按钮点击事件
+        batchSelectButton.setOnClickListener { 
+            toggleBatchMode() 
+        }
+        selectAllButton.setOnClickListener { 
+            selectAllDevices() 
+        }
+        deleteBatchButton.setOnClickListener { 
+            deleteSelectedDevices() 
+        }
+        cancelBatchButton.setOnClickListener { 
+            exitBatchMode() 
+        }
     }
 
     private fun initializeDeviceData() {
         deviceList.clear()
 
-        // 添加设备数据（与HomeFragment一致）
-        deviceList.addAll(listOf(
-            ColdChainDevice(
-                id = 1,
-                name = "冷藏车-沪A12345",
-                status = DeviceStatus.NORMAL,
-                temperature = "2.5°C",
-                humidity = "65%",
-                oxygenLevel = "20.8%",
-                location = "上海市浦东新区张江高科技园区",
-                lastUpdate = Date(),
-                latLng = null
-            ),
-            ColdChainDevice(
-                id = 2,
-                name = "冷库-浦东配送中心",
-                status = DeviceStatus.WARNING,
-                temperature = "4.2°C",
-                humidity = "70%",
-                oxygenLevel = "19.5%",
-                location = "上海市浦东新区金桥出口加工区",
-                lastUpdate = Date(System.currentTimeMillis() - 300000),
-                latLng = null
-            ),
-            ColdChainDevice(
-                id = 3,
-                name = "冷藏柜-徐汇门店",
-                status = DeviceStatus.ERROR,
-                temperature = "8.7°C",
-                humidity = "75%",
-                oxygenLevel = "18.2%",
-                location = "上海市徐汇区淮海中路",
-                lastUpdate = Date(System.currentTimeMillis() - 600000),
-                latLng = null
-            ),
-            ColdChainDevice(
-                id = 4,
-                name = "冷藏车-沪B67890",
-                status = DeviceStatus.NORMAL,
-                temperature = "3.1°C",
-                humidity = "62%",
-                oxygenLevel = "20.9%",
-                location = "上海市虹桥国际机场货运区",
-                lastUpdate = Date(),
-                latLng = null
-            ),
-            ColdChainDevice(
-                id = 5,
-                name = "冷库-松江仓储中心",
-                status = DeviceStatus.NORMAL,
-                temperature = "1.8°C",
-                humidity = "58%",
-                oxygenLevel = "21.0%",
-                location = "上海市松江区泗泾物流园区",
-                lastUpdate = Date(System.currentTimeMillis() - 120000),
-                latLng = null
-            ),
-            ColdChainDevice(
-                id = 6,
-                name = "疫苗运输车-沪C11223",
-                status = DeviceStatus.WARNING,
-                temperature = "3.5°C",
-                humidity = "60%",
-                oxygenLevel = "19.8%",
-                location = "上海市长宁区临空经济园区",
-                lastUpdate = Date(System.currentTimeMillis() - 180000),
-                latLng = null
-            ),
-            ColdChainDevice(
-                id = 7,
-                name = "冷藏集装箱-洋山港",
-                status = DeviceStatus.NORMAL,
-                temperature = "2.8°C",
-                humidity = "63%",
-                oxygenLevel = "20.7%",
-                location = "上海市洋山深水港",
-                lastUpdate = Date(System.currentTimeMillis() - 240000),
-                latLng = null
-            ),
-            ColdChainDevice(
-                id = 8,
-                name = "医药冷库-嘉定园区",
-                status = DeviceStatus.NORMAL,
-                temperature = "1.5°C",
-                humidity = "55%",
-                oxygenLevel = "21.1%",
-                location = "上海市嘉定区工业区",
-                lastUpdate = Date(System.currentTimeMillis() - 360000),
-                latLng = null
+        // 移除模拟数据，从MQTT服务获取真实设备数据
+        MqttService.deviceMap.forEach { (deviceName, mqttDevice) ->
+            deviceList.add(
+                com.example.dgb.ColdChainDevice(
+                    id = mqttDevice.id,
+                    name = mqttDevice.name,
+                    status = mqttDevice.status,
+                    temperature = mqttDevice.temperature,
+                    humidity = mqttDevice.humidity,
+                    oxygenLevel = mqttDevice.oxygenLevel,
+                    location = mqttDevice.location,
+                    lastUpdate = mqttDevice.lastUpdate,
+                    latLng = mqttDevice.latLng
+                )
             )
-        ))
+        }
 
         // 初始化筛选列表
         filteredDeviceList.clear()
@@ -212,6 +185,12 @@ class DeviceFragment : Fragment() {
                 DeviceStatus.ERROR ->
                     statusText.setBackgroundResource(R.drawable.status_background_error)
             }
+            
+            // 设置轨迹回放按钮
+            val trackReplayButton = cardView.findViewById<ImageButton>(R.id.track_replay_button)
+            trackReplayButton.setOnClickListener {
+                navigateToTrackReplay(device.id)
+            }
 
             // 设置温度信息
             cardView.findViewById<TextView>(R.id.device_temp).text = device.temperature
@@ -230,16 +209,42 @@ class DeviceFragment : Fragment() {
             cardView.findViewById<TextView>(R.id.device_last_update).text =
                 "最后更新: ${dateFormat.format(device.lastUpdate)}"
 
-            // 为卡片添加点击事件 - 查看历史记录
-            cardView.setOnClickListener {
-                showHistoryDialog(device)
+            // 获取复选框
+            val checkbox = cardView.findViewById<CheckBox>(R.id.device_checkbox)
+
+            // 根据批量模式设置卡片点击事件
+            if (isBatchMode) {
+                // 批量模式下点击卡片切换选择状态
+                cardView.setOnClickListener {
+                    toggleDeviceSelection(device.id, checkbox)
+                }
+
+                // 复选框点击事件
+                checkbox.setOnCheckedChangeListener { _, isChecked ->
+                    if (isChecked) {
+                        selectedDevices.add(device.id)
+                    } else {
+                        selectedDevices.remove(device.id)
+                    }
+                    updateSelectedCount()
+                }
+            } else {
+                // 普通模式下点击卡片查看历史记录
+                cardView.setOnClickListener {
+                    navigateToHistoryChart(device.id)
+                }
+
+                // 为卡片添加长按事件 - 设备详情
+                cardView.setOnLongClickListener {
+                    showDeviceDetails(device)
+                    true
+                }
             }
 
-            // 为卡片添加长按事件 - 设备详情
-            cardView.setOnLongClickListener {
-                showDeviceDetails(device)
-                true
-            }
+            // 根据批量模式设置复选框可见性
+            checkbox.visibility = if (isBatchMode) View.VISIBLE else View.GONE
+            // 设置复选框的选中状态
+            checkbox.isChecked = selectedDevices.contains(device.id)
 
             // 将卡片添加到容器
             devicesContainer.addView(cardView)
@@ -310,15 +315,123 @@ class DeviceFragment : Fragment() {
 
     private fun applyFilter(statusIndex: Int) {
         filteredDeviceList.clear()
-
+        
         when (statusIndex) {
             0 -> filteredDeviceList.addAll(deviceList) // 全部
             1 -> filteredDeviceList.addAll(deviceList.filter { it.status == DeviceStatus.NORMAL })
             2 -> filteredDeviceList.addAll(deviceList.filter { it.status == DeviceStatus.WARNING })
             3 -> filteredDeviceList.addAll(deviceList.filter { it.status == DeviceStatus.ERROR })
         }
-
+        
         displayDeviceCards()
+    }
+
+    /**
+     * 切换批量选择模式
+     */
+    private fun toggleBatchMode() {
+        isBatchMode = true
+        batchSelectButton?.visibility = android.view.View.GONE
+        batchActionBar?.visibility = android.view.View.VISIBLE
+        displayDeviceCards()
+    }
+
+    /**
+     * 退出批量选择模式
+     */
+    private fun exitBatchMode() {
+        isBatchMode = false
+        selectedDevices.clear()
+        batchSelectButton?.visibility = android.view.View.VISIBLE
+        batchActionBar?.visibility = android.view.View.GONE
+        displayDeviceCards()
+    }
+
+    /**
+     * 更新选中设备数量
+     */
+    private fun updateSelectedCount() {
+        selectedCountText.text = "已选择 ${selectedDevices.size} 项"
+    }
+
+    /**
+     * 切换设备选择状态
+     */
+    private fun toggleDeviceSelection(deviceId: Int, checkbox: CheckBox) {
+        if (selectedDevices.contains(deviceId)) {
+            selectedDevices.remove(deviceId)
+            checkbox.isChecked = false
+        } else {
+            selectedDevices.add(deviceId)
+            checkbox.isChecked = true
+        }
+        updateSelectedCount()
+    }
+
+    /**
+     * 全选/取消全选设备
+     */
+    private fun selectAllDevices() {
+        val isAllSelected = selectedDevices.size == filteredDeviceList.size
+        selectedDevices.clear()
+
+        if (!isAllSelected) {
+            // 全选
+            selectedDevices.addAll(filteredDeviceList.map { it.id })
+            selectAllButton.text = "取消全选"
+        } else {
+            // 取消全选
+            selectAllButton.text = "全选"
+        }
+        updateSelectedCount()
+        displayDeviceCards()
+    }
+
+    /**
+     * 删除选中的设备
+     */
+    private fun deleteSelectedDevices() {
+        if (selectedDevices.isEmpty()) {
+            return
+        }
+
+        // 显示确认对话框
+        AlertDialog.Builder(requireContext())
+            .setTitle("确认删除")
+            .setMessage("确定要删除选中的 ${selectedDevices.size} 个设备吗？")
+            .setPositiveButton("删除") { _, _ ->
+                // 从设备列表中移除选中的设备
+                deviceList.removeAll { selectedDevices.contains(it.id) }
+                filteredDeviceList.removeAll { selectedDevices.contains(it.id) }
+                selectedDevices.clear()
+
+                // 更新设备统计和显示
+                updateDeviceStats()
+                displayDeviceCards()
+                updateSelectedCount()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+    
+    // 导航到历史数据图表Fragment
+    private fun navigateToHistoryChart(deviceId: Int) {
+        val historyChartFragment = com.example.dgb.ui.charts.HistoryChartFragment.newInstance(deviceId.toLong())
+        
+        // 使用FragmentManager进行Fragment切换
+        parentFragmentManager.beginTransaction()
+            .replace(R.id.fragment_container, historyChartFragment)
+            .addToBackStack(null) // 添加到返回栈，支持返回操作
+            .commit()
+    }
+    
+    /**
+     * 跳转到轨迹回放页面
+     */
+    private fun navigateToTrackReplay(deviceId: Int) {
+        val intent = Intent(activity, TrackReplayActivity::class.java)
+        intent.putExtra("deviceId", deviceId)
+        startActivity(intent)
     }
 
     private fun resetFilter() {
@@ -371,6 +484,11 @@ class DeviceFragment : Fragment() {
 
         // 设置关闭按钮事件
         dialog.findViewById<MaterialButton>(R.id.btn_close).setOnClickListener {
+            dialog.dismiss()
+        }
+        
+        // 设置标题栏关闭按钮事件
+        dialog.findViewById<ImageButton>(R.id.btn_back).setOnClickListener {
             dialog.dismiss()
         }
 
@@ -524,30 +642,10 @@ class DeviceFragment : Fragment() {
     data class HistoryRecord(
         val id: Int,
         val time: String,
-        val status: DeviceStatus,
+        val status: com.example.dgb.DeviceStatus,
         val temperature: String,
         val humidity: String,
         val oxygenLevel: String,
         val location: String
     )
-
-    // 数据模型类（与HomeFragment共享）
-    data class ColdChainDevice(
-        val id: Int,
-        val name: String,
-        val status: DeviceStatus,
-        val temperature: String,
-        val humidity: String,
-        val oxygenLevel: String,
-        val location: String,
-        val lastUpdate: Date,
-        val latLng: LatLng?
-    )
-
-    // 设备状态枚举（与HomeFragment共享）
-    enum class DeviceStatus(val displayName: String) {
-        NORMAL("正常"),
-        WARNING("警告"),
-        ERROR("异常")
-    }
 }

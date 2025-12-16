@@ -13,14 +13,15 @@ data class ColdChainDevice(
     var oxygenLevel: String,
     val location: String,
     var lastUpdate: Date,
-    val latLng: LatLng?
+    val latLng: LatLng?,
+    var speed: String? = null
 )
 
 // 设备状态枚举
-enum class DeviceStatus(val displayName: String, val colorResId: Int) {
-    NORMAL("正常", R.color.status_normal),
-    WARNING("警告", R.color.status_warning),
-    ERROR("异常", R.color.status_error)
+enum class DeviceStatus(val displayName: String) {
+    NORMAL("正常"),
+    WARNING("警告"),
+    ERROR("异常")
 }
 
 // 原始数据点（每5秒一条）

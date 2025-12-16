@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 回放速度选项 -->
+    <string-array name="replay_speed_options">
+        <item>0.5x</item>
+        <item>1.0x</item>
+        <item>1.5x</item>
+        <item>2.0x</item>
+        <item>3.0x</item>
+    </string-array>
+</resources>

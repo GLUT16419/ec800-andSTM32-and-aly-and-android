@@ -7,6 +7,15 @@ import android.os.IBinder
 import android.util.Log
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
+import com.example.dgb.data.DeviceDatabase
+import com.example.dgb.data.DeviceHistoryEntity
+import com.example.dgb.data.EventLogger
+import kotlinx.coroutines.*
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.ThreadFactory
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import com.aliyun.alink.dm.api.DeviceInfo
 import com.aliyun.alink.dm.api.IoTApiClientConfig
 import com.aliyun.alink.linkkit.api.ILinkKitConnectListener
@@ -30,9 +39,21 @@ import java.util.Date
 
 
 class MqttService : Service() {
+    // 自定义协程作用域，替代GlobalScope
+    private val mqttCoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    
+    // 优化线程池配置，核心线程数设置为可用处理器数的一半，避免线程过多
+    private val threadPool = Executors.newFixedThreadPool(
+        Math.max(2, Runtime.getRuntime().availableProcessors() / 2), // 核心线程数
+        ThreadFactory { r -> Thread(r, "MqttService-Thread") }
+    ) as ThreadPoolExecutor
+    
+    // 使用ConcurrentHashMap替代MutableList，提供更好的并发性能
     public companion object {
-        public var deviceList = mutableListOf<ColdChainDevice>()
-        object ServiceDataRepository {
+        public val deviceMap = ConcurrentHashMap<String, ColdChainDevice>()
+        // 存储设备的轨迹数据
+        public val deviceTrackMap = ConcurrentHashMap<String, MutableList<TrackPoint>>()
+        public object ServiceDataRepository {
             private val _updateEvent = MutableLiveData<Unit>()
             val updateEvent: LiveData<Unit> = _updateEvent
 
@@ -40,6 +61,66 @@ class MqttService : Service() {
                 _updateEvent.postValue(Unit) // 线程安全
             }
         }
+    }
+    
+    // 数据解析缓存，减少重复字符串解析操作
+    private val dataParseCache = ConcurrentHashMap<String, Triple<Double, Double, Double>>() // 设备名 -> (温度, 湿度, 氧气浓度)
+    
+    // 数据库操作缓存，减少频繁查询
+    private val dbQueryCache = ConcurrentHashMap<CacheKey, CacheValue<List<DeviceHistoryEntity>>>() // 支持多种查询类型的缓存
+    
+    // 缓存键，支持不同类型的查询
+    private data class CacheKey(
+        val queryType: QueryType, // 查询类型
+        val deviceId: Int, // 设备ID
+        val startTime: Long = 0, // 开始时间（可选）
+        val endTime: Long = Long.MAX_VALUE, // 结束时间（可选）
+        val limit: Int = 0 // 限制数量（可选）
+    )
+    
+    // 缓存值，包含数据和过期时间
+    private data class CacheValue<T>(
+        val data: T, // 缓存数据
+        val expiryTime: Long // 过期时间（毫秒）
+    )
+    
+    // 查询类型枚举
+    private enum class QueryType {
+        ALL_HISTORIES, // 所有历史数据
+        TIME_RANGE, // 时间范围内的历史数据
+        LATEST_N, // 最新的N条数据
+        AVERAGE_TEMPERATURE, // 平均温度
+        AVERAGE_HUMIDITY, // 平均湿度
+        AVERAGE_OXYGEN_LEVEL // 平均氧气浓度
+    }
+    
+    override fun onDestroy() {
+        super.onDestroy()
+        
+        // 取消协程作用域
+        mqttCoroutineScope.cancel()
+        
+        // 关闭线程池
+        threadPool.shutdown()
+        try {
+            if (!threadPool.awaitTermination(5, TimeUnit.SECONDS)) {
+                threadPool.shutdownNow()
+            }
+        } catch (e: InterruptedException) {
+            threadPool.shutdownNow()
+            Thread.currentThread().interrupt()
+        }
+        // 断开MQTT连接
+        LinkKit.getInstance().deinit()
+        
+        // 记录最终内存使用并停止性能监控
+        PerformanceMonitor.recordMemoryUsage()
+        PerformanceMonitor.stopMonitoring()
+        
+        eventLogger.info(
+            type = com.example.dgb.data.EventType.SYSTEM_EVENT,
+            message = "MQTT服务已停止"
+        )
     }
     private val PRODUCTKEY = "k21inrJttUu"
     private var DEVICENAME = "android"
@@ -50,12 +131,7 @@ class MqttService : Service() {
     var hosturl="iot-06z00ccayws04qj.mqtt.iothub.aliyuncs.com:"+PORT
     val InstanceID="iot-06z00ccayws04qj"
 
-    // 设备状态枚举
-    enum class DeviceStatus(val displayName: String) {
-        NORMAL("正常"),
-        WARNING("警告"),
-        ERROR("异常")
-    }
+    // 设备状态使用外部枚举类
     public data class ColdChainDevice(
         var id: Int,
         var name: String,
@@ -68,51 +144,129 @@ class MqttService : Service() {
         var latLng: LatLng,
         var speed: String
     )
-    public
 
     override fun onBind(intent: Intent?): IBinder? {
         return null
     }
+    
+    // 事件日志记录器
+    private lateinit var eventLogger: EventLogger
+    
+    override fun onCreate() {
+        super.onCreate()
+        // 初始化事件日志记录器
+        eventLogger = EventLogger.getInstance(this)
+        eventLogger.info(
+            type = com.example.dgb.data.EventType.SYSTEM_EVENT,
+            message = "MQTT服务已启动"
+        )
+        // 启动性能监控
+        PerformanceMonitor.startMonitoring()
+        // 记录初始内存使用
+        PerformanceMonitor.recordMemoryUsage()
+        deviceConnect()
+    }
     private fun parseAndHandleMessage(jsonString: String) {
-        try {
-            val rootObject = JSONObject(jsonString)
-            val deviceId = rootObject.optString("deviceName")
-            val dataObject = rootObject.optJSONObject("items")
-            if (dataObject != null) {
-                val temperature = dataObject.optJSONObject("VehInsideTemp")?.optDouble("value")?.toString()+"°C"
-                val humidity = dataObject.optJSONObject("mhumi")?.optInt("value")?.toString()+"%"
-                val speed=dataObject.optJSONObject("VehSpeed")?.optDouble("value")?.toFloat()?.toString()+"km/h"
-                val oxygenLevel = dataObject.optJSONObject("O2Content")?.optString("value")+"%"
-                Log.d(TAG, "解析结果 -> 设备: $deviceId, 温度: $temperature, 湿度: $humidity, 速度: $speed, 氧气浓度: $oxygenLevel")
-
-                // TODO: 在这里处理解析出的数据，例如更新UI、保存到数据库或触发其他逻辑
-                // 转换为字符串格式
-                // 创建 ColdChainDevice 对象
-                val coldChainDevice = ColdChainDevice(
-                    id = 0,
-                    name = deviceId,
-                    status = DeviceStatus.ERROR,
-                    temperature = temperature.toString(),
-                    oxygenLevel = oxygenLevel, // 新增：默认值为 "null"
-                    humidity = humidity,
-                    location = "null",
-                    lastUpdate = Date(),
-                    latLng = LatLng(0.0, 0.0),
-                    speed = speed
-                )
-                coldChainDevice.status = when {
-                    (coldChainDevice.oxygenLevel.replace("%", "").toDoubleOrNull() ?: 0.0) < 18.5 -> MqttService.DeviceStatus.ERROR
-                    (coldChainDevice.temperature.replace("°C", "").toDoubleOrNull() ?: 25.0) >5.0 -> MqttService.DeviceStatus.ERROR
-                    (coldChainDevice.humidity.replace("%", "").toDoubleOrNull() ?: 25.0) >50.0 -> MqttService.DeviceStatus.ERROR
-                    (coldChainDevice.oxygenLevel.replace("%", "").toDoubleOrNull() ?: 0.0) < 19.5 -> MqttService.DeviceStatus.WARNING
-                    (coldChainDevice.temperature.replace("°C", "").toDoubleOrNull() ?: 25.0) >0.0 -> MqttService.DeviceStatus.WARNING
-                    (coldChainDevice.humidity.replace("%", "").toDoubleOrNull() ?: 25.0) >30.0 -> MqttService.DeviceStatus.WARNING
-                    else -> DeviceStatus.NORMAL
+        PerformanceMonitor.measureExecutionTime("消息解析") {
+            try {
+                val rootObject = JSONObject(jsonString)
+                Log.d(TAG, "rootObject内容: $rootObject")
+                val deviceId = rootObject.optString("deviceName")
+                
+                // 处理所有设备数据，支持自动添加新设备
+                if (deviceId.isNullOrEmpty()) {
+                    Log.e(TAG, "设备名称为空，忽略消息")
+                    return@measureExecutionTime
                 }
-                updateDeviceData(coldChainDevice)
+                
+                val dataObject = rootObject.optJSONObject("items")
+                Log.d(TAG, "dataObject内容: $dataObject")
+                if (dataObject != null) {
+                    // 解析车内温度
+                    val temperature = dataObject.optJSONObject("VehInsideTemp")?.optDouble("value")?.toString()+"°C"
+                    // 解析湿度
+                    val humidity = dataObject.optJSONObject("mhumi")?.optInt("value")?.toString()+"%"
+                    // 解析速度
+                    val speed = dataObject.optJSONObject("VehSpeed")?.optDouble("value")?.toFloat()?.toString()+"km/h"
+                    // 解析氧气含量
+                    val oxygenLevel = dataObject.optJSONObject("O2Content")?.optString("value")+"%"
+                    // 解析地理位置
+                    val geoLocation = dataObject.optJSONObject("GeoLocation")
+                    var locationStr = "null"
+                    var latLng = LatLng(0.0, 0.0)
+                    if (geoLocation != null) {
+                        Log.d(TAG, "GeoLocation对象: $geoLocation")
+                        val geoValue = geoLocation.optJSONObject("value")
+                        if (geoValue != null) {
+                            Log.d(TAG, "GeoLocation.value对象: $geoValue")
+                            // 直接获取经纬度值，使用强制类型转换确保正确性
+                            val longitudeValue = geoValue.get("Longitude")
+                            val latitudeValue = geoValue.get("Latitude")
+                            Log.d(TAG, "Longitude值: $longitudeValue, 类型: ${longitudeValue.javaClass.name}")
+                            Log.d(TAG, "Latitude值: $latitudeValue, 类型: ${latitudeValue.javaClass.name}")
+                            
+                            // 转换为Double类型
+                            val longitude = when (longitudeValue) {
+                                is Number -> longitudeValue.toDouble()
+                                is String -> longitudeValue.toDoubleOrNull() ?: 0.0
+                                else -> 0.0
+                            }
+                            val latitude = when (latitudeValue) {
+                                is Number -> latitudeValue.toDouble()
+                                is String -> latitudeValue.toDoubleOrNull() ?: 0.0
+                                else -> 0.0
+                            }
+                            val altitude = geoValue.optDouble("Altitude", 0.0)
+                            val coordinateSystem = geoValue.optInt("CoordinateSystem", 2)
+                               
+                            // 验证坐标是否有效（非零且非NaN）
+                            val isValidCoordinate = longitude != 0.0 && latitude != 0.0 && !longitude.isNaN() && !latitude.isNaN()
+                            if (isValidCoordinate) {
+                                // 构建位置字符串
+                                locationStr = "经度: $longitude, 纬度: $latitude, 海拔: $altitude, 坐标系: ${if (coordinateSystem == 1) "WGS_84" else "GCJ_02"}"
+                                // 创建LatLng对象
+                                latLng = LatLng(latitude, longitude)
+                                Log.d(TAG, "解析得到的有效经纬度: $latLng")
+                            } else {
+                                Log.w(TAG, "解析得到无效坐标: 经度=$longitude, 纬度=$latitude")
+                            }
+                        }
+                    }
+                    
+                    Log.d(TAG, "解析结果 -> 设备: $deviceId, 温度: $temperature, 湿度: $humidity, 速度: $speed, 氧气浓度: $oxygenLevel, 位置: $locationStr")
+
+                    // 创建 ColdChainDevice 对象，使用设备名称的哈希值作为唯一id
+                    val coldChainDevice = ColdChainDevice(
+                        id = deviceId.hashCode(),
+                        name = deviceId,
+                        status = com.example.dgb.DeviceStatus.ERROR,
+                        temperature = temperature,
+                        oxygenLevel = oxygenLevel,
+                        humidity = humidity,
+                        location = locationStr,
+                        lastUpdate = Date(),
+                        latLng = latLng,
+                        speed = speed
+                    )
+                    coldChainDevice.status = when {
+                        (coldChainDevice.oxygenLevel.replace("%", "").toDoubleOrNull() ?: 0.0) < 18.5 -> com.example.dgb.DeviceStatus.ERROR
+                        (coldChainDevice.temperature.replace("°C", "").toDoubleOrNull() ?: 25.0) >5.0 -> com.example.dgb.DeviceStatus.ERROR
+                        (coldChainDevice.humidity.replace("%", "").toDoubleOrNull() ?: 25.0) >50.0 -> com.example.dgb.DeviceStatus.ERROR
+                        (coldChainDevice.oxygenLevel.replace("%", "").toDoubleOrNull() ?: 0.0) < 19.5 -> com.example.dgb.DeviceStatus.WARNING
+                        (coldChainDevice.temperature.replace("°C", "").toDoubleOrNull() ?: 25.0) >0.0 -> com.example.dgb.DeviceStatus.WARNING
+                        (coldChainDevice.humidity.replace("%", "").toDoubleOrNull() ?: 25.0) >30.0 -> com.example.dgb.DeviceStatus.WARNING
+                        else -> com.example.dgb.DeviceStatus.NORMAL
+                    }
+                    updateDeviceData(coldChainDevice)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "解析JSON失败", e)
+                eventLogger.logException(
+                    type = com.example.dgb.data.EventType.NETWORK_ERROR,
+                    message = "解析设备数据JSON失败",
+                    exception = e
+                )
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "解析JSON失败", e)
         }
     }
     fun deviceConnect()
@@ -169,6 +323,8 @@ class MqttService : Service() {
         params.ioTDMConfig = ioTDMConfig
 
         val client=LinkKit.getInstance()
+        // 添加连接状态标志，避免重复重连
+        var isReconnecting = false
         //Step6: 下行消息处理回调设置
         client.registerOnPushListener(object : IConnectNotifyListener {
             override fun onNotify(s: String?, s1: String?, aMessage: AMessage?) {
@@ -176,6 +332,10 @@ class MqttService : Service() {
                 // 1. 安全判断：确认消息不为空
                 if (aMessage == null) {
                     Log.w(TAG, "收到空消息")
+                    eventLogger.warning(
+                        type = com.example.dgb.data.EventType.NETWORK_ERROR,
+                        message = "收到空的MQTT消息"
+                    )
                     return
                 }
 
@@ -184,6 +344,10 @@ class MqttService : Service() {
                 val payloadBytes = aMessage.data as? ByteArray
                 if (payloadBytes == null) {
                     Log.e(TAG, "消息负载格式不正确")
+                    eventLogger.error(
+                        type = com.example.dgb.data.EventType.NETWORK_ERROR,
+                        message = "MQTT消息负载格式不正确"
+                    )
                     return
                 }
 
@@ -191,6 +355,12 @@ class MqttService : Service() {
                 try {
                     val messageContent = String(payloadBytes, Charsets.UTF_8)
                     Log.d(TAG, "收到消息 -> Topic相关标识: $s, 内容: $messageContent")
+                    
+                    eventLogger.info(
+                        type = com.example.dgb.data.EventType.NETWORK_ERROR,
+                        message = "收到MQTT消息",
+                        details = "Topic: $s, 内容: $messageContent"
+                    )
 
                     // TODO: 4. 在这里根据你的业务逻辑处理 messageContent
                     // 例如，如果消息是JSON格式，可以在这里解析出具体的属性值
@@ -198,6 +368,11 @@ class MqttService : Service() {
 
                 } catch (e: Exception) {
                     Log.e(TAG, "解析消息内容时出错", e)
+                    eventLogger.logException(
+                        type = com.example.dgb.data.EventType.NETWORK_ERROR,
+                        message = "解析MQTT消息内容时出错",
+                        exception = e
+                    )
                 }}
 
             override fun shouldHandle(s: String?, s1: String?): Boolean {
@@ -211,18 +386,39 @@ class MqttService : Service() {
                     TAG,
                     "onConnectStateChange() called with: connectId = [" + connectId + "], connectState = [" + connectState + "]"
                 )
-
+                
+                // 记录连接成功状态
+                if (connectState == ConnectState.CONNECTED) {
+                    eventLogger.info(
+                        type = com.example.dgb.data.EventType.SYSTEM_EVENT,
+                        message = "MQTT连接成功"
+                    )
+                    isReconnecting = false
+                }
 
                 //首次连云可能失败。对于首次连云失败，SDK会报出ConnectState.CONNECTFAIL这种状态。对于这种场景，用户可以尝试若干次后退出，也可以一直重试直到连云成功
-                //TODO: 以下是首次建连时用户主动重试的一个参考实现，用户可以打开下面注释使能下述代码
-                if(connectState == ConnectState.CONNECTFAIL){
-                    try{
-                        Thread.sleep(5000);
-                        PersistentNet.getInstance().reconnect();
-                    }catch (e: InterruptedException){
-                        Log.d(TAG, "exception is " + e);
-                    };
-                    Log.d(TAG, "onConnectStateChange() try to reconnect when connect failed");
+                //使用线程池执行重连操作，避免线程创建开销
+                if(connectState == ConnectState.CONNECTFAIL && !isReconnecting){
+                    isReconnecting = true
+                    threadPool.execute {
+                        try{
+                            Thread.sleep(5000);
+                            PersistentNet.getInstance().reconnect();
+                        }catch (e: InterruptedException){
+                            Log.d(TAG, "exception is " + e);
+                            Thread.currentThread().interrupt()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "重连失败: " + e.message, e)
+                            eventLogger.error(
+                                type = com.example.dgb.data.EventType.NETWORK_ERROR,
+                                message = "MQTT重连失败",
+                                details = "错误: ${e.toString()}"
+                            )
+                        } finally {
+                            isReconnecting = false
+                        }
+                        Log.d(TAG, "onConnectStateChange() try to reconnect when connect failed");
+                    }
                 }
 
                 //SDK连云成功后，后续如果网络波动导致连接断开时，SDK会抛出ConnectState.DISCONNECTED这种状态。在这种情况下，SDK会自动尝试重连，重试的间隔是1s、2s、4s、8s...128s...128s，到了最大间隔128s后，会一直以128s为间隔重连直到连云成功。
@@ -237,17 +433,26 @@ class MqttService : Service() {
         client.init(getApplicationContext(), params, object : ILinkKitConnectListener {
             override fun onError(p0: AError) {
                 ALog.d(TAG, "onError() called with: error = [" + p0 + "]")
+                eventLogger.error(
+                    type = com.example.dgb.data.EventType.NETWORK_ERROR,
+                    message = "MQTT连接初始化失败",
+                    details = "错误: ${p0.toString()}"
+                )
             }
 
             override fun onInitDone(data: Any?) {
                 ALog.d(TAG, "onInitDone() called with: data = [" + data + "]")
+                eventLogger.info(
+                    type = com.example.dgb.data.EventType.SYSTEM_EVENT,
+                    message = "MQTT连接初始化成功"
+                )
             }
         })
 
 
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        deviceConnect()
+        // 不重复调用deviceConnect()，避免重复初始化连接
         return START_STICKY
     }
 
@@ -260,44 +465,212 @@ class MqttService : Service() {
             latLng = LatLng(0.0, 0.0),
             speed = "null",
             humidity = "null",
-            status = DeviceStatus.ERROR,
+            status = com.example.dgb.DeviceStatus.ERROR,
             id=-1,
             name = "null"
         )
-        // 从阿里云获取设备数据
-        latestData.speed=LinkKit.getInstance().getDeviceThing().getPropertyValue("VehSpeed").toString()+"km/h"
-        latestData.temperature=LinkKit.getInstance().getDeviceThing().getPropertyValue("VehInsideTemp").toString()+"°C"
-        latestData.oxygenLevel=LinkKit.getInstance().getDeviceThing().getPropertyValue("O2Content").toString()+"%"
-        latestData.humidity= LinkKit.getInstance().getDeviceThing().getPropertyValue("mhumi").toString()
-        latestData.location=LinkKit.getInstance().getDeviceThing().getPropertyValue("GeoLocation").toString()
-        latestData.name= LinkKit.getInstance().getDeviceThing().getPropertyValue("DevName").toString()
+        try {
+            // 从阿里云获取设备数据 - 这些操作可能是耗时的，建议在工作线程中调用此方法
+            latestData.speed = LinkKit.getInstance().getDeviceThing().getPropertyValue("VehSpeed").toString() + "km/h"
+            latestData.temperature = LinkKit.getInstance().getDeviceThing().getPropertyValue("VehInsideTemp").toString() + "°C"
+            latestData.oxygenLevel = LinkKit.getInstance().getDeviceThing().getPropertyValue("O2Content").toString() + "%"
+            latestData.humidity = LinkKit.getInstance().getDeviceThing().getPropertyValue("mhumi").toString()
+            latestData.location = LinkKit.getInstance().getDeviceThing().getPropertyValue("GeoLocation").toString()
+            latestData.name = LinkKit.getInstance().getDeviceThing().getPropertyValue("DevName").toString()
+        } catch (e: Exception) {
+            Log.e(TAG, "获取最新设备数据失败: ${e.message}", e)
+        }
         return latestData
     }
 
-    private fun updateDeviceData(target: ColdChainDevice){
-        deviceList.forEachIndexed { index, device ->
-            if (device.name == target.name) {
-                if(target.temperature!="null")
-                    device.temperature=target.temperature
-                if(target.oxygenLevel!="null")
-                    device.oxygenLevel=target.oxygenLevel
-                if(target.location!="null")
-                    device.location=target.location
-                if(target.lastUpdate!=Date())
-                    device.lastUpdate=target.lastUpdate
-                if(target.latLng!=LatLng(0.0, 0.0))
-                    device.latLng=target.latLng
-                if(target.speed!="null")
-                    device.speed=target.speed
-                if(target.humidity!="null")
-                    device.humidity=target.humidity
-                device.status=target.status
-                ServiceDataRepository.notifyFragmentToUpdate()
-                return
+    private fun updateDeviceData(target: ColdChainDevice) {
+        // 使用deviceMap的原子操作进行设备数据更新
+        val updatedDevice = deviceMap.compute(target.name) { _, existingDevice ->
+            if (existingDevice != null) {
+                // 更新现有设备的属性
+                existingDevice.apply {
+                    if (target.temperature != "null") temperature = target.temperature
+                    if (target.oxygenLevel != "null") oxygenLevel = target.oxygenLevel
+                    if (target.location != "null") location = target.location
+                    if (target.lastUpdate != Date()) lastUpdate = target.lastUpdate
+                    if (target.latLng != LatLng(0.0, 0.0)) latLng = target.latLng
+                    if (target.speed != "null") speed = target.speed
+                    if (target.humidity != "null") humidity = target.humidity
+                    status = target.status
+                }
+            } else {
+                // 添加新设备
+                target
             }
         }
-        // 如果没有找到匹配的设备ID，添加新设备
-        deviceList.add(target)
+        
+        // 记录设备轨迹数据
+        if (updatedDevice != null && updatedDevice.latLng.latitude != 0.0 && updatedDevice.latLng.longitude != 0.0 && !updatedDevice.latLng.latitude.isNaN() && !updatedDevice.latLng.longitude.isNaN()) {
+            Log.d(TAG, "记录设备 ${updatedDevice.name} 的轨迹数据，位置: ${updatedDevice.latLng}")
+            val trackPoint = TrackPoint(
+                latLng = updatedDevice.latLng,
+                timestamp = updatedDevice.lastUpdate.time,
+                speed = updatedDevice.speed?.replace("km/h", "")?.toDoubleOrNull() ?: 0.0,
+                status = updatedDevice.status
+            )
+            
+            // 获取或创建设备的轨迹列表
+            val trackList = deviceTrackMap.computeIfAbsent(updatedDevice.name) { mutableListOf() }
+            
+            // 添加新轨迹点
+            trackList.add(trackPoint)
+            Log.d(TAG, "设备 ${updatedDevice.name} 的轨迹点数量: ${trackList.size}")
+            
+            // 限制轨迹点数量，保留最近的100个点
+            if (trackList.size > 100) {
+                trackList.removeAt(0)
+                Log.d(TAG, "设备 ${updatedDevice.name} 的轨迹点数量超过100，已移除最早的点")
+            }
+        }
+        
+        // 保存数据到数据库（在协程中执行）
+        if (updatedDevice != null) {
+            mqttCoroutineScope.launch(Dispatchers.IO) {
+                saveDeviceDataToDatabase(updatedDevice)
+            }
+        }
+        
+        // 通知UI更新
         ServiceDataRepository.notifyFragmentToUpdate()
+    }
+    
+    // 将设备数据保存到数据库
+    private suspend fun saveDeviceDataToDatabase(device: ColdChainDevice) {
+        withContext(Dispatchers.IO) {
+            PerformanceMonitor.measureExecutionTimeSuspend("数据库保存") {
+                try {
+                    // 获取数据库实例
+                    val database = DeviceDatabase.getDatabase(applicationContext)
+                    
+                    // 使用缓存减少重复的字符串解析操作
+                    val (temperature, humidity, oxygenLevel) = dataParseCache.compute(device.name) { _, cachedValue ->
+                        // 只有当缓存不存在或数据发生变化时才重新解析
+                        if (cachedValue == null || !isCacheValid(cachedValue, device)) {
+                            // 重新解析数据
+                            val temp = device.temperature.replace("°C", "").toDoubleOrNull() ?: 0.0
+                            val humi = device.humidity.replace("%", "").toDoubleOrNull() ?: 0.0
+                            val o2 = device.oxygenLevel.replace("%", "").toDoubleOrNull() ?: 0.0
+                            Triple(temp, humi, o2)
+                        } else {
+                            cachedValue
+                        }
+                    } ?: Triple(0.0, 0.0, 0.0)
+                    
+                    // 创建历史数据实体
+                    val historyEntity = DeviceHistoryEntity(
+                        deviceId = device.id,
+                        timestamp = device.lastUpdate.time,
+                        status = when (device.status) {
+                            com.example.dgb.DeviceStatus.NORMAL -> 0
+                            com.example.dgb.DeviceStatus.WARNING -> 1
+                            com.example.dgb.DeviceStatus.ERROR -> 2
+                        },
+                        temperature = temperature,
+                        humidity = humidity,
+                        oxygenLevel = oxygenLevel,
+                        latitude = device.latLng?.latitude,
+                        longitude = device.latLng?.longitude
+                    )
+                    // 插入数据
+                    database.deviceHistoryDao().insertHistory(historyEntity)
+                    Log.d(TAG, "设备数据已保存到数据库: ${device.name}")
+                    
+                    // 清除该设备的相关缓存，确保数据一致性
+                    clearDeviceCache(device.id)
+                    
+                    // 定期记录内存使用（每10秒记录一次）
+                    if (System.currentTimeMillis() % 10000 < 100) {
+                        PerformanceMonitor.recordMemoryUsage()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "保存设备数据到数据库失败", e)
+                }
+            }
+        }
+    }
+    
+    // 清除指定设备的相关缓存
+    private fun clearDeviceCache(deviceId: Int) {
+        // 清除所有与该设备相关的缓存条目
+        dbQueryCache.keys.removeIf { key -> key.deviceId == deviceId }
+    }
+    
+    /**
+     * 检查缓存是否有效
+     */
+    private fun isCacheValid(cachedValue: Triple<Double, Double, Double>, device: ColdChainDevice): Boolean {
+        // 尝试解析当前设备数据
+        val currentTemp = device.temperature.replace("°C", "").toDoubleOrNull()
+        val currentHumi = device.humidity.replace("%", "").toDoubleOrNull()
+        val currentO2 = device.oxygenLevel.replace("%", "").toDoubleOrNull()
+        
+        // 如果解析失败，缓存无效
+        if (currentTemp == null || currentHumi == null || currentO2 == null) {
+            return false
+        }
+        
+        // 检查缓存值是否与当前值一致
+        return cachedValue.first == currentTemp && 
+               cachedValue.second == currentHumi && 
+               cachedValue.third == currentO2
+    }
+    
+    /**
+     * 获取设备历史数据，优先使用缓存
+     */
+    suspend fun getDeviceHistory(deviceId: Int, startTime: Long = 0, endTime: Long = Long.MAX_VALUE): List<DeviceHistoryEntity> {
+        // 创建缓存键
+        val cacheKey = CacheKey(QueryType.TIME_RANGE, deviceId, startTime, endTime)
+        
+        // 检查缓存是否存在且未过期（缓存有效期5分钟）
+        val currentTime = System.currentTimeMillis()
+        val cachedValue = dbQueryCache[cacheKey]
+        if (cachedValue != null && cachedValue.expiryTime > currentTime) {
+            Log.d(TAG, "使用缓存获取设备历史数据: deviceId=$deviceId, startTime=$startTime, endTime=$endTime")
+            return cachedValue.data
+        }
+        
+        // 缓存不存在或已过期，从数据库获取
+        val database = DeviceDatabase.getDatabase(applicationContext)
+        val histories = database.deviceHistoryDao().getHistoriesByDeviceIdAndTimeRange(deviceId, startTime, endTime)
+        
+        // 更新缓存，有效期5分钟
+        val newCacheValue = CacheValue(histories, currentTime + 5 * 60 * 1000)
+        dbQueryCache[cacheKey] = newCacheValue
+        
+        Log.d(TAG, "从数据库获取设备历史数据并更新缓存: deviceId=$deviceId, startTime=$startTime, endTime=$endTime, count=${histories.size}")
+        return histories
+    }
+    
+    /**
+     * 获取设备最新的N条历史数据，优先使用缓存
+     */
+    suspend fun getLatestDeviceHistory(deviceId: Int, limit: Int): List<DeviceHistoryEntity> {
+        // 创建缓存键
+        val cacheKey = CacheKey(QueryType.LATEST_N, deviceId, limit = limit)
+        
+        // 检查缓存是否存在且未过期（缓存有效期1分钟）
+        val currentTime = System.currentTimeMillis()
+        val cachedValue = dbQueryCache[cacheKey]
+        if (cachedValue != null && cachedValue.expiryTime > currentTime) {
+            Log.d(TAG, "使用缓存获取最新设备历史数据: deviceId=$deviceId, limit=$limit")
+            return cachedValue.data
+        }
+        
+        // 缓存不存在或已过期，从数据库获取
+        val database = DeviceDatabase.getDatabase(applicationContext)
+        val histories = database.deviceHistoryDao().getLatestHistories(deviceId, limit)
+        
+        // 更新缓存，有效期1分钟
+        val newCacheValue = CacheValue(histories, currentTime + 60 * 1000)
+        dbQueryCache[cacheKey] = newCacheValue
+        
+        Log.d(TAG, "从数据库获取最新设备历史数据并更新缓存: deviceId=$deviceId, limit=$limit, count=${histories.size}")
+        return histories
     }
 }

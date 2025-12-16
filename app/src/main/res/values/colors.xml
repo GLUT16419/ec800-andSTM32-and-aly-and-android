@@ -43,4 +43,9 @@
     <color name="track_end_color">#F44336</color>
     <color name="button_primary">#2196F3</color>
     <color name="button_logout">#F44336</color>
+    <!-- 主题颜色 -->
+    <color name="colorPrimary">#2196F3</color>
+    <!-- 缺失的颜色定义 -->
+    <color name="primary_color">#2196F3</color>
+    <color name="info_window_background">#FFFFFF</color>
 </resources>

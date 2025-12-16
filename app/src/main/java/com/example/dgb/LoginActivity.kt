@@ -32,6 +32,8 @@ import androidx.compose.ui.tooling.preview.Preview
 // 预设的账户密码
 private const val PRESET_USERNAME = "user"
 private const val PRESET_PASSWORD = "password123"
+private const val PRESET_ADMIN_USERNAME = "admin"
+private const val PRESET_ADMIN_PASSWORD = "admin123"
 
 class LoginActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -44,7 +46,11 @@ class LoginActivity : ComponentActivity() {
         val rememberMe = prefs.getBoolean("rememberMe", false)
 
         // 如果记住了密码且保存的用户名密码与预设的一致，则直接跳转到 MainActivity
-        if (rememberMe && username == PRESET_USERNAME && password == PRESET_PASSWORD) {
+        if (rememberMe && (
+                (username == PRESET_USERNAME && password == PRESET_PASSWORD) ||
+                (username == PRESET_ADMIN_USERNAME && password == PRESET_ADMIN_PASSWORD)
+            )
+        ) {
             val intent = Intent(this, MainActivity::class.java)
             startActivity(intent)
             finish() // 关闭当前登录页面
@@ -233,8 +239,13 @@ fun LoginScreenWithRemember(onLoginSuccess: () -> Unit) {
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
+                Text("普通用户")
                 Text("用户名: $PRESET_USERNAME")
                 Text("密码: $PRESET_PASSWORD")
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("管理员")
+                Text("用户名: $PRESET_ADMIN_USERNAME")
+                Text("密码: $PRESET_ADMIN_PASSWORD")
             }
         }
     }
