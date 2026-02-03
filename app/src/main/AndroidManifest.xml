@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools" >
 
@@ -33,7 +33,7 @@
 
         <meta-data
             android:name="com.amap.api.v2.apikey"
-            android:value="d593d43d3617397a64454494f3d76134" />
+            android:value="testAmapApiKey1234567890" />
 
         <service
             android:name=".MqttService"

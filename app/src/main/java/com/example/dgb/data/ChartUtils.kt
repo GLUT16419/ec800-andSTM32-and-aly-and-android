@@ -15,6 +15,7 @@ import com.github.mikephil.charting.interfaces.datasets.ILineDataSet
 import com.github.mikephil.charting.interfaces.datasets.IRadarDataSet
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.min
 
 // 图表工具类，用于绘制环境参数趋势图和数据可视化
 class ChartUtils(private val context: Context) {
@@ -204,28 +205,36 @@ class ChartUtils(private val context: Context) {
      * 配置图表基本属性
      */
     private fun configureChart(chart: LineChart) {
-        // 启用触摸手势
+        // 启用触摸手势，但优化性能
         chart.setTouchEnabled(true)
         chart.isDragEnabled = true
         chart.setScaleEnabled(true)
         chart.setDrawGridBackground(false)
-        chart.isDoubleTapToZoomEnabled = true
+        chart.isDoubleTapToZoomEnabled = false // 禁用双击缩放以提高性能
         chart.setPinchZoom(true)
+        
+        // 优化绘制性能
+        chart.animateX(0) // 禁用X轴动画
+        chart.animateY(0) // 禁用Y轴动画
+        chart.animateXY(0, 0) // 禁用XY轴动画
         
         // 配置X轴
         val xAxis = chart.xAxis
         xAxis.position = XAxis.XAxisPosition.BOTTOM
-        xAxis.setDrawGridLines(false)
+        xAxis.setDrawGridLines(false) // 禁用X轴网格线
         xAxis.setDrawAxisLine(true)
         xAxis.textSize = 10f
         xAxis.granularity = 1f
         xAxis.labelRotationAngle = 45f
+        xAxis.labelCount = 10 // 限制标签数量
         
         // 配置Y轴
         val leftYAxis = chart.axisLeft
         leftYAxis.setDrawGridLines(true)
-        leftYAxis.gridLineWidth = 0.5f
+        leftYAxis.gridLineWidth = 0.25f // 减小网格线宽度
         leftYAxis.textSize = 10f
+        leftYAxis.labelCount = 8 // 限制标签数量
+        leftYAxis.setDrawZeroLine(false) // 禁用零线绘制
         
         val rightYAxis = chart.axisRight
         rightYAxis.isEnabled = false
@@ -243,6 +252,9 @@ class ChartUtils(private val context: Context) {
         val description = Description()
         description.textSize = 12f
         chart.description = description
+        
+        // 优化渲染性能
+        chart.renderer.paintRender.isAntiAlias = false // 禁用抗锯齿以提高性能
     }
     
     /**
@@ -260,6 +272,78 @@ class ChartUtils(private val context: Context) {
     }
     
     /**
+     * 数据采样算法，减少数据点数量同时保持趋势
+     */
+    private fun sampleDataPoints(histories: List<DeviceHistoryEntity>, maxPoints: Int = 500): List<DeviceHistoryEntity> {
+        if (histories.size <= maxPoints) {
+            return histories // 如果数据点数量已经较少，直接返回
+        }
+        
+        val sampledData = mutableListOf<DeviceHistoryEntity>()
+        val step = histories.size / maxPoints
+        
+        // 采样算法：保留首末点和关键转折点
+        sampledData.add(histories.first())
+        
+        var lastValue = when {
+            histories.first().temperature != 0.0 -> histories.first().temperature
+            histories.first().humidity != 0.0 -> histories.first().humidity
+            else -> histories.first().oxygenLevel
+        }
+        
+        var lastAddedIndex = 0
+        
+        for (i in 1 until histories.size - 1 step step) {
+            val current = histories[i]
+            val next = histories[min(i + step, histories.size - 1)]
+            
+            // 获取当前值
+            val currentValue = when {
+                current.temperature != 0.0 -> current.temperature
+                current.humidity != 0.0 -> current.humidity
+                else -> current.oxygenLevel
+            }
+            
+            val nextValue = when {
+                next.temperature != 0.0 -> next.temperature
+                next.humidity != 0.0 -> next.humidity
+                else -> next.oxygenLevel
+            }
+            
+            // 如果是转折点（斜率变化），保留该点
+            val isTurningPoint = (currentValue - lastValue) * (nextValue - currentValue) < 0
+            if (isTurningPoint && i - lastAddedIndex > step / 2) {
+                sampledData.add(current)
+                lastAddedIndex = i
+                lastValue = currentValue
+            }
+            
+            // 每step个点强制保留一个
+            if (i - lastAddedIndex >= step) {
+                sampledData.add(current)
+                lastAddedIndex = i
+                lastValue = currentValue
+            }
+        }
+        
+        // 添加最后一个点
+        if (histories.lastIndex - lastAddedIndex > step / 2) {
+            sampledData.add(histories.last())
+        } else {
+            // 如果最后一个点离上一个添加的点太近，替换掉上一个点
+            sampledData[sampledData.size - 1] = histories.last()
+        }
+        
+        // 确保最终数据点数量不超过maxPoints
+        if (sampledData.size > maxPoints) {
+            val finalStep = sampledData.size / maxPoints
+            return sampledData.filterIndexed { index, _ -> index % finalStep == 0 }
+        }
+        
+        return sampledData
+    }
+    
+    /**
      * 准备参数数据点
      */
     private fun prepareParameterEntries(histories: List<DeviceHistoryEntity>, parameter: ParameterType): List<Entry> {
@@ -268,8 +352,11 @@ class ChartUtils(private val context: Context) {
         // 按时间排序
         val sortedHistories = histories.sortedBy { it.timestamp }
         
+        // 数据采样，减少绘制的数据点数量
+        val sampledHistories = sampleDataPoints(sortedHistories)
+        
         // 创建数据点
-        for ((index, history) in sortedHistories.withIndex()) {
+        for ((index, history) in sampledHistories.withIndex()) {
             val value = when (parameter) {
                 ParameterType.TEMPERATURE -> history.temperature
                 ParameterType.HUMIDITY -> history.humidity
@@ -287,22 +374,32 @@ class ChartUtils(private val context: Context) {
     private fun createLineDataSet(entries: List<Entry>, label: String, color: Int): LineDataSet {
         val dataSet = LineDataSet(entries, label)
         
-        // 设置折线属性
+        // 设置折线属性，优化性能
         dataSet.color = color
-        dataSet.lineWidth = 2f
-        dataSet.setCircleColor(color)
-        dataSet.circleRadius = 3f
+        dataSet.lineWidth = 1.5f // 减小线宽
+        dataSet.setDrawCircles(false) // 禁用点的绘制，大幅提高性能
         dataSet.setDrawCircleHole(false)
-        dataSet.setDrawValues(false)
+        dataSet.setDrawValues(false) // 禁用值标签绘制
         
-        // 设置填充属性
+        // 仅在数据点较少时绘制点
+        if (entries.size < 500) {
+            dataSet.setDrawCircles(true)
+            dataSet.circleRadius = 1.5f // 减小点半径
+            dataSet.setCircleColor(color)
+        }
+        
+        // 设置填充属性，优化性能
         dataSet.setDrawFilled(true)
         dataSet.fillColor = color
-        dataSet.fillAlpha = 50
+        dataSet.fillAlpha = 30 // 降低填充透明度
         dataSet.fillFormatter = IFillFormatter { _, _ -> dataSet.yMin }
         
-        // 设置平滑曲线
-        dataSet.mode = LineDataSet.Mode.CUBIC_BEZIER
+        // 设置平滑曲线，但仅在数据点较少时使用
+        dataSet.mode = if (entries.size < 1000) {
+            LineDataSet.Mode.CUBIC_BEZIER
+        } else {
+            LineDataSet.Mode.LINEAR // 大数据量时使用直线，提高性能
+        }
         
         return dataSet
     }

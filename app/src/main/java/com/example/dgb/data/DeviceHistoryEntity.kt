@@ -1,11 +1,16 @@
 package com.example.dgb.data
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.example.dgb.DeviceStatus
 
 // 设备历史数据实体类，对应数据库表
-@Entity(tableName = "device_history")
+@Entity(tableName = "device_history",
+    indices = [
+        Index(value = ["deviceId", "timestamp"], unique = false) // 为deviceId和timestamp添加联合索引
+    ]
+)
 data class DeviceHistoryEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val deviceId: Int,

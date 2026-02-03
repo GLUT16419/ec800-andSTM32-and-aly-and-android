@@ -8,7 +8,10 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.TextView
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.example.dgb.DeviceStatus
 import com.example.dgb.R
 import com.example.dgb.data.DeviceHistoryViewModel
@@ -16,9 +19,7 @@ import com.example.dgb.data.DeviceHistoryViewModelFactory
 import com.example.dgb.data.StatisticsAnalyzer
 import com.github.mikephil.charting.charts.*
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -166,15 +167,61 @@ class HistoryChartFragment : Fragment() {
         val endTime = System.currentTimeMillis()
         val startTime = calculateStartTime(endTime, currentTimeRange)
         
-        // 使用带时间范围的方法获取历史数据
-        viewModel.getDeviceHistoriesInTimeRange(deviceId.toInt(), startTime, endTime) { histories ->
-            // 更新统计概览
-            updateStatisticsOverview(histories)
-            
-            // 根据选择的图表类型创建并显示图表
-            displayChart(histories)
+        // 直接在后台线程执行数据加载和处理
+        lifecycleScope.launch(Dispatchers.IO) {
+            // 使用回调方式获取历史数据
+            viewModel.getDeviceHistoriesInTimeRange(deviceId.toInt(), startTime, endTime) { histories ->
+                // 在后台线程计算统计数据
+                val statisticsData = calculateStatisticsData(histories)
+                
+                // 在后台线程准备图表
+                val preparedChart = prepareChartInBackground(histories)
+                
+                // 切换到主线程更新UI
+                lifecycleScope.launch(Dispatchers.Main) {
+                    // 更新统计概览
+                    updateStatisticsOverview(histories)
+                    
+                    // 显示准备好的图表
+                    showPreparedChart(preparedChart)
+                }
+            }
         }
     }
+    
+    // 在后台线程计算统计数据
+    private fun calculateStatisticsData(histories: List<com.example.dgb.data.DeviceHistoryEntity>): StatisticsData {
+        if (histories.isEmpty()) {
+            return StatisticsData(emptyList(), emptyList(), emptyList(), emptyMap(), emptyMap(), Pair(0, 0))
+        }
+        
+        // 计算统计数据
+        val temperatures = histories.map { it.temperature }
+        val humidities = histories.map { it.humidity }
+        val oxygenLevels = histories.map { it.oxygenLevel }
+        
+        val tempStats = statisticsAnalyzer.calculateBasicStatistics(temperatures)
+        val humidityStats = statisticsAnalyzer.calculateBasicStatistics(humidities)
+        val oxygenStats = statisticsAnalyzer.calculateBasicStatistics(oxygenLevels)
+        
+        val statusDistribution = statisticsAnalyzer.calculateStatusDistribution(histories)
+        val statusDurations = statisticsAnalyzer.calculateStatusDurations(histories)
+        
+        val timeRange = statisticsAnalyzer.getTimeRange(histories)
+        
+        // 将TimeRange对象转换为Pair<Long, Long>类型
+        return StatisticsData(temperatures, humidities, oxygenLevels, statusDistribution, statusDurations, Pair(timeRange.startTime, timeRange.endTime))
+    }
+    
+    // 统计数据封装类
+    private data class StatisticsData(
+        val temperatures: List<Double>,
+        val humidities: List<Double>,
+        val oxygenLevels: List<Double>,
+        val statusDistribution: Map<DeviceStatus, Int>,
+        val statusDurations: Map<DeviceStatus, Long>,
+        val timeRange: Pair<Long, Long>
+    )
     
     // 更新统计概览
     private fun updateStatisticsOverview(histories: List<com.example.dgb.data.DeviceHistoryEntity>) {
@@ -196,8 +243,8 @@ class HistoryChartFragment : Fragment() {
         
         val timeRange = statisticsAnalyzer.getTimeRange(histories)
         
-        // 在主线程更新UI
-        GlobalScope.launch(Dispatchers.Main) {
+        // 在主线程更新UI，使用lifecycleScope避免内存泄漏
+        lifecycleScope.launch(Dispatchers.Main) {
             // 清空现有内容
             statisticsOverview.removeAllViews()
             
@@ -224,26 +271,23 @@ class HistoryChartFragment : Fragment() {
         statisticsOverview.addView(cardView)
     }
     
-    // 根据选择的图表类型显示图表
-    private fun displayChart(histories: List<com.example.dgb.data.DeviceHistoryEntity>) {
+    // 在后台线程准备图表
+    private fun prepareChartInBackground(histories: List<com.example.dgb.data.DeviceHistoryEntity>): Any? {
         if (histories.isEmpty()) {
-            showNoDataMessage()
-            return
+            return null
         }
         
-        // 清空现有图表
-        chartContainer.removeAllViews()
-        
-        when (currentChartType) {
-            ChartType.TEMPERATURE -> displayTemperatureChart(histories)
-            ChartType.HUMIDITY -> displayHumidityChart(histories)
-            ChartType.OXYGEN -> displayOxygenChart(histories)
-            ChartType.STATUS_DISTRIBUTION -> displayStatusDistributionChart(histories)
+        // 在后台线程创建图表
+        return when (currentChartType) {
+            ChartType.TEMPERATURE -> prepareTemperatureChartInBackground(histories)
+            ChartType.HUMIDITY -> prepareHumidityChartInBackground(histories)
+            ChartType.OXYGEN -> prepareOxygenChartInBackground(histories)
+            ChartType.STATUS_DISTRIBUTION -> prepareStatusDistributionChartInBackground(histories)
         }
     }
     
-    // 显示温度图表
-    private fun displayTemperatureChart(histories: List<com.example.dgb.data.DeviceHistoryEntity>) {
+    // 在后台线程准备温度图表
+    private fun prepareTemperatureChartInBackground(histories: List<com.example.dgb.data.DeviceHistoryEntity>): LineChart {
         // 创建折线图
         val chart = LineChart(requireContext())
         val layoutParams = ViewGroup.LayoutParams(
@@ -269,12 +313,11 @@ class HistoryChartFragment : Fragment() {
         // 设置X轴标签
         ChartUtils.setXAxisTimeLabels(chart, timeLabels)
         
-        // 添加到容器
-        chartContainer.addView(chart)
+        return chart
     }
     
-    // 显示湿度图表
-    private fun displayHumidityChart(histories: List<com.example.dgb.data.DeviceHistoryEntity>) {
+    // 在后台线程准备湿度图表
+    private fun prepareHumidityChartInBackground(histories: List<com.example.dgb.data.DeviceHistoryEntity>): LineChart {
         // 创建折线图
         val chart = LineChart(requireContext())
         val layoutParams = ViewGroup.LayoutParams(
@@ -300,12 +343,11 @@ class HistoryChartFragment : Fragment() {
         // 设置X轴标签
         ChartUtils.setXAxisTimeLabels(chart, timeLabels)
         
-        // 添加到容器
-        chartContainer.addView(chart)
+        return chart
     }
     
-    // 显示氧气浓度图表
-    private fun displayOxygenChart(histories: List<com.example.dgb.data.DeviceHistoryEntity>) {
+    // 在后台线程准备氧气浓度图表
+    private fun prepareOxygenChartInBackground(histories: List<com.example.dgb.data.DeviceHistoryEntity>): BarChart {
         // 创建柱状图
         val chart = BarChart(requireContext())
         val layoutParams = ViewGroup.LayoutParams(
@@ -331,12 +373,11 @@ class HistoryChartFragment : Fragment() {
         // 设置X轴标签
         ChartUtils.setXAxisTimeLabels(chart, timeLabels)
         
-        // 添加到容器
-        chartContainer.addView(chart)
+        return chart
     }
     
-    // 显示状态分布图表
-    private fun displayStatusDistributionChart(histories: List<com.example.dgb.data.DeviceHistoryEntity>) {
+    // 在后台线程准备状态分布图表
+    private fun prepareStatusDistributionChartInBackground(histories: List<com.example.dgb.data.DeviceHistoryEntity>): PieChart {
         // 创建饼图
         val chart = PieChart(requireContext())
         val layoutParams = ViewGroup.LayoutParams(
@@ -360,8 +401,26 @@ class HistoryChartFragment : Fragment() {
         // 设置数据
         chart.data = pieData
         
-        // 添加到容器
-        chartContainer.addView(chart)
+        return chart
+    }
+    
+    // 显示准备好的图表
+    private fun showPreparedChart(preparedChart: Any?) {
+        // 清空现有图表
+        chartContainer.removeAllViews()
+        
+        if (preparedChart == null) {
+            showNoDataMessage()
+            return
+        }
+        
+        // 将准备好的图表添加到容器中
+        when (preparedChart) {
+            is com.github.mikephil.charting.charts.LineChart -> chartContainer.addView(preparedChart)
+            is com.github.mikephil.charting.charts.BarChart -> chartContainer.addView(preparedChart)
+            is com.github.mikephil.charting.charts.PieChart -> chartContainer.addView(preparedChart)
+            else -> showNoDataMessage()
+        }
     }
     
     // 显示无数据提示

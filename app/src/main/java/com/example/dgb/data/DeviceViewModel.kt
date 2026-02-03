@@ -13,8 +13,8 @@ import kotlinx.coroutines.withContext
 // 设备数据ViewModel，用于管理设备数据的离线存储和同步
 class DeviceViewModel(application: Application) : AndroidViewModel(application) {
     private val context = application.applicationContext
-    private val deviceDatabase = DeviceDatabase.getDatabase(context)
     private val syncService = SyncService(context)
+    private val deviceDataProcessor = DeviceDataProcessor(context)
     
     // 设备列表LiveData
     private val _devices = MutableLiveData<List<DeviceEntity>>()
@@ -46,7 +46,7 @@ class DeviceViewModel(application: Application) : AndroidViewModel(application) 
     private fun loadDevicesFromLocal() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                deviceDatabase.deviceDao().getAllDevices().collect { deviceEntities ->
+                deviceDataProcessor.getAllDevices().collect { deviceEntities ->
                     withContext(Dispatchers.Main) {
                         _devices.value = deviceEntities ?: emptyList()
                     }
@@ -62,7 +62,7 @@ class DeviceViewModel(application: Application) : AndroidViewModel(application) 
     // 监听设备列表变化
     private fun observeDevices() {
         viewModelScope.launch(Dispatchers.Main) {
-            deviceDatabase.deviceDao().getAllDevices().collect {
+            deviceDataProcessor.getAllDevices().collect {
                 _devices.value = it
             }
         }
@@ -113,7 +113,7 @@ class DeviceViewModel(application: Application) : AndroidViewModel(application) 
     // 根据设备ID获取设备
     suspend fun getDeviceById(deviceId: Int): DeviceEntity? {
         return try {
-            deviceDatabase.deviceDao().getDeviceById(deviceId)
+            deviceDataProcessor.getDeviceById(deviceId)
         } catch (e: Exception) {
             withContext(Dispatchers.Main) {
                 _error.value = "获取设备信息失败：${e.message}"
@@ -124,12 +124,12 @@ class DeviceViewModel(application: Application) : AndroidViewModel(application) 
     
     // 根据设备状态获取设备列表
     fun getDevicesByStatus(status: com.example.dgb.DeviceStatus): kotlinx.coroutines.flow.Flow<List<DeviceEntity>> {
-        return deviceDatabase.deviceDao().getDevicesByStatus(status.ordinal)
+        return deviceDataProcessor.getDevicesByStatus(status)
     }
     
     // 根据设备类型获取设备列表
     fun getDevicesByType(deviceType: String): kotlinx.coroutines.flow.Flow<List<DeviceEntity>> {
-        return deviceDatabase.deviceDao().getDevicesByType(deviceType)
+        return deviceDataProcessor.getDevicesByType(deviceType)
     }
     
     // 清理资源

@@ -78,6 +78,28 @@ interface DeviceHistoryDao {
     @Query("SELECT MIN(temperature) FROM device_history WHERE deviceId = :deviceId AND timestamp BETWEEN :startTime AND :endTime")
     suspend fun getMinTemperature(deviceId: Int, startTime: Long, endTime: Long): Double?
 
+    // 分页查询指定设备的历史数据，按时间降序排列
+    @Query("SELECT * FROM device_history WHERE deviceId = :deviceId ORDER BY timestamp DESC LIMIT :limit OFFSET :offset")
+    suspend fun getHistoriesByDeviceIdPaged(deviceId: Int, limit: Int, offset: Int): List<DeviceHistoryEntity>
+
+    // 分页查询指定设备在时间范围内的历史数据，按时间升序排列
+    @Query("SELECT * FROM device_history WHERE deviceId = :deviceId AND timestamp BETWEEN :startTime AND :endTime ORDER BY timestamp ASC LIMIT :limit OFFSET :offset")
+    suspend fun getHistoriesByDeviceIdAndTimeRangePaged(
+        deviceId: Int,
+        startTime: Long,
+        endTime: Long,
+        limit: Int,
+        offset: Int
+    ): List<DeviceHistoryEntity>
+
+    // 获取指定设备的历史数据总数
+    @Query("SELECT COUNT(*) FROM device_history WHERE deviceId = :deviceId")
+    suspend fun getHistoriesCountByDeviceId(deviceId: Int): Int
+
+    // 获取指定设备在时间范围内的历史数据总数
+    @Query("SELECT COUNT(*) FROM device_history WHERE deviceId = :deviceId AND timestamp BETWEEN :startTime AND :endTime")
+    suspend fun getHistoriesCountByDeviceIdAndTimeRange(deviceId: Int, startTime: Long, endTime: Long): Int
+
     // 内部数据类：状态统计结果
     data class StatusCount(
         val status: Int,

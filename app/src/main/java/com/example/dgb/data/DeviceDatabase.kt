@@ -9,7 +9,7 @@ import androidx.room.TypeConverters
 // 数据库类，定义数据库版本和包含的实体
 @Database(
     entities = [DeviceHistoryEntity::class, DeviceEntity::class, EventLogEntity::class],
-    version = 3, // 增加版本号以支持事件日志表
+    version = 4, // 增加版本号以修复数据完整性验证失败问题
     exportSchema = false
 )
 @TypeConverters() // 如果需要类型转换器，可以在这里添加

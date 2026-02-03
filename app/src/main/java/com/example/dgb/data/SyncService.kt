@@ -18,8 +18,7 @@ class SyncService(private val context: Context) {
     // 自定义协程作用域
     private val syncCoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     
-    private val deviceDao = DeviceDatabase.getDatabase(context).deviceDao()
-    private val deviceHistoryDao = DeviceDatabase.getDatabase(context).deviceHistoryDao()
+    private val deviceDataProcessor = DeviceDataProcessor(context)
     private val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     
     // 网络状态LiveData
@@ -109,31 +108,8 @@ class SyncService(private val context: Context) {
     fun storeDevicesToLocal(devices: List<ColdChainDevice>) {
         syncCoroutineScope.launch(Dispatchers.IO) {
             try {
-                // 转换为DeviceEntity列表
-                val deviceEntities = devices.map { DeviceEntity.fromColdChainDevice(it) }
-                
-                // 批量插入或更新设备信息
-                deviceDao.insertOrUpdateDevices(deviceEntities)
-                
-                // 同时将设备的最新状态保存到历史记录
-                val historyEntities = devices.map { device ->
-                    // 从字符串中提取数值（移除单位）
-                    val tempValue = device.temperature.replace("°C", "").toDoubleOrNull() ?: 0.0
-                    val humidityValue = device.humidity.replace("%", "").toDoubleOrNull() ?: 0.0
-                    val oxygenValue = device.oxygenLevel.replace("%", "").toDoubleOrNull() ?: 0.0
-                    
-                    DeviceHistoryEntity(
-                        deviceId = device.id,
-                        timestamp = device.lastUpdate.time,
-                        status = device.status.ordinal,
-                        temperature = tempValue,
-                        humidity = humidityValue,
-                        oxygenLevel = oxygenValue,
-                        latitude = device.latLng.latitude,
-                        longitude = device.latLng.longitude
-                    )
-                }
-                deviceHistoryDao.insertHistories(historyEntities)
+                // 使用设备数据处理器存储设备信息
+                deviceDataProcessor.storeDevicesToLocal(devices)
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     _syncError.postValue("存储设备信息失败：${e.message}")
@@ -144,13 +120,13 @@ class SyncService(private val context: Context) {
     
     // 从本地数据库获取所有设备
     fun getDevicesFromLocal(): kotlinx.coroutines.flow.Flow<List<DeviceEntity>> {
-        return deviceDao.getAllDevices()
+        return deviceDataProcessor.getAllDevices()
     }
     
     // 从本地数据库获取指定设备
     
     suspend fun getDeviceFromLocal(deviceId: Int): DeviceEntity? {
-        return deviceDao.getDeviceById(deviceId)
+        return deviceDataProcessor.getDeviceById(deviceId)
     }
     
     // 清理资源
